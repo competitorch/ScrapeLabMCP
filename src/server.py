@@ -2930,8 +2930,8 @@ async def batch_scrape_urls(
     headless: bool = True,
 ) -> Dict[str, Any]:
     """
-    Start a batch scraping job for multiple URLs.
-    Uses a recipe if available. HTTP parallel first, browser fallback for failures.
+    Batch scrape multiple URLs. Returns lightweight results (analysis + markdown_preview)
+    to stay under MCP size limits. Use scrape_url on individual URLs for full markdown.
 
     Args:
         urls (List[str]): List of URLs to scrape.
@@ -2939,7 +2939,7 @@ async def batch_scrape_urls(
         headless (bool): Run browser in headless mode (default True).
 
     Returns:
-        Dict[str, Any]: Batch results with per-URL data.
+        Dict[str, Any]: Batch results with per-URL analysis and markdown_preview (first 2000 chars).
     """
     recipe = None
     if recipe_id is not None:

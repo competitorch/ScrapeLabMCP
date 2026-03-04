@@ -270,6 +270,9 @@ def clean_html(html: str) -> str:
 # --- Batch scrape ---
 
 
+BATCH_MARKDOWN_PREVIEW = 2000
+
+
 async def batch_scrape(
     urls: List[str],
     browser_manager,
@@ -280,6 +283,8 @@ async def batch_scrape(
     """
     Batch scrape multiple URLs.
     Strategy: try all URLs with HTTP in parallel first, then browser for failures.
+    Returns lightweight results (analysis + markdown_preview) to stay under MCP size limits.
+    Use scrape_smart() on individual URLs for full markdown content.
     """
     results: Dict[str, Dict[str, Any]] = {}
     wait_for = recipe.get("wait_for") if recipe else None
@@ -300,16 +305,7 @@ async def batch_scrape(
             continue
         url, result = item
         if result is not None:
-            cleaned = clean_html(result["html"])
-            results[url] = {
-                "url": url,
-                "engine": "httpx",
-                "html_size": len(result["html"]),
-                "cleaned_size": len(cleaned),
-                "html": cleaned,
-            }
-            if recipe:
-                results[url]["recipe_prompt"] = recipe.get("prompt", "")
+            results[url] = _build_batch_result(url, result["html"], "httpx", recipe)
         else:
             browser_needed.append(url)
 
@@ -317,17 +313,29 @@ async def batch_scrape(
     for url in browser_needed:
         try:
             result = await browser_fetch(url, browser_manager, wait_for=wait_for, headless=headless)
-            cleaned = clean_html(result["html"])
-            results[url] = {
-                "url": url,
-                "engine": "nodriver",
-                "html_size": len(result["html"]),
-                "cleaned_size": len(cleaned),
-                "html": cleaned,
-            }
-            if recipe:
-                results[url]["recipe_prompt"] = recipe.get("prompt", "")
+            results[url] = _build_batch_result(url, result["html"], "nodriver", recipe)
         except Exception as e:
             results[url] = {"url": url, "error": str(e)}
 
     return [results.get(u, {"url": u, "error": "not processed"}) for u in urls]
+
+
+def _build_batch_result(
+    url: str, html: str, engine: str, recipe: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Build a lightweight batch result: analysis + markdown preview (no full markdown)."""
+    markdown = html_to_markdown(html)
+    analysis = analyze_page(html, url)
+    analysis["engine"] = engine
+
+    entry: Dict[str, Any] = {
+        "url": url,
+        "engine": engine,
+        "html_size": len(html),
+        "markdown_size": len(markdown),
+        "analysis": analysis,
+        "markdown_preview": markdown[:BATCH_MARKDOWN_PREVIEW],
+    }
+    if recipe:
+        entry["recipe_id"] = recipe.get("id")
+    return entry
