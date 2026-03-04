@@ -2845,8 +2845,8 @@ async def save_recipe(
         "wait_for": wait_for,
         "needs_proxy": int(needs_proxy),
         "geo_target": geo_target,
-        "api_endpoints": json.dumps(api_endpoints) if api_endpoints else None,
-        "pagination": json.dumps(pagination) if pagination else None,
+        "api_endpoints": api_endpoints,
+        "pagination": pagination,
     }
     return await db_save_recipe(data)
 
