@@ -1,0 +1,57 @@
+{
+  "manifest_version": "0.4",
+  "name": "scrapelab-mcp",
+  "version": "0.3.0",
+  "display_name": "ScrapeLab MCP",
+  "description": "Smart scraping with recipes, stealth browser, and Supabase backend",
+  "author": {
+    "name": "Competitorch"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "python", "${__dirname}/src/server.py", "--transport", "stdio"],
+      "env": {
+        "SUPABASE_URL": "${user_config.SUPABASE_URL}",
+        "SUPABASE_SERVICE_KEY": "${user_config.SUPABASE_SERVICE_KEY}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "scrape_url", "description": "Scrape any URL using saved recipes or browser fallback" },
+    { "name": "discover_url", "description": "Analyze a URL structure before scraping" },
+    { "name": "save_recipe", "description": "Save a scraping recipe for a site" },
+    { "name": "list_recipes", "description": "List all saved scraping recipes" },
+    { "name": "delete_recipe", "description": "Delete a scraping recipe" },
+    { "name": "recipe_history", "description": "Get version history for a recipe" },
+    { "name": "batch_scrape_urls", "description": "Scrape multiple URLs in parallel" },
+    { "name": "spawn_browser", "description": "Launch a stealth browser instance" },
+    { "name": "navigate", "description": "Navigate browser to a URL" }
+  ],
+  "keywords": ["scraping", "browser", "stealth", "recipes", "automation"],
+  "user_config": {
+    "SUPABASE_URL": {
+      "type": "string",
+      "title": "Supabase URL",
+      "description": "Your Supabase project URL (e.g. https://xxxxx.supabase.co)",
+      "required": true
+    },
+    "SUPABASE_SERVICE_KEY": {
+      "type": "string",
+      "title": "Supabase Service Key",
+      "description": "Supabase service_role key for recipe database access",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}
