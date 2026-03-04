@@ -99,16 +99,33 @@ claude mcp add-json scrapelab-mcp '{
 | `get_specialist_recipe` | Get specialist guide (api-rest, ecommerce, wordpress...) |
 | `get_output_schema` | Get JSON schema (generic, travel, ecommerce) |
 
-### Recipe System
+### Recipe System — Site Bundles
 
-Recipes are stored in `src/data/recipes.json` — a shared JSON file in the repo. When you save a recipe, it's available to everyone using the same MCP installation.
+Each site gets its own folder under `src/data/sites/` with everything needed:
+
+```
+src/data/sites/
+├── weroad/
+│   ├── config.json       # scraping strategy (level, wait_for, proxy)
+│   ├── prompt.md         # extraction instructions for the LLM
+│   ├── script.py         # reusable scraping script (optional)
+│   └── schema.json       # output schema (optional)
+│
+├── gadventures/
+│   ├── config.json
+│   ├── prompt.md
+│   └── script.py
+```
+
+When `scrape_url` matches a recipe, it returns the prompt, script, and schema — so Claude can execute immediately without regenerating code.
 
 ```
 save_recipe(
   site_pattern="weroad.it",
   site_name="WeRoad",
-  scrape_level=1,           # 1=HTTP, 2=Browser stealth
-  wait_for=".tour-card",    # CSS selector to wait for
+  scrape_level=1,
+  prompt="# WeRoad\n\nExtract all tours with dates and prices...",
+  script="import httpx\n\nasync def scrape(url): ...",
 )
 ```
 

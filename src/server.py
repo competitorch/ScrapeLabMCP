@@ -2820,6 +2820,8 @@ async def save_recipe(
     api_endpoints: Optional[List[str]] = None,
     pagination: Optional[Dict[str, Any]] = None,
     prompt: Optional[str] = None,
+    script: Optional[str] = None,
+    schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Save a scraping recipe after discovery + user validation.
@@ -2837,9 +2839,11 @@ async def save_recipe(
         api_endpoints (Optional[List[str]]): Known API endpoints to intercept.
         pagination (Optional[Dict[str, Any]]): Pagination strategy: {type: 'scroll'|'click'|'api', selector: '...'}.
         prompt (Optional[str]): Markdown extraction instructions. Saved as a separate .md file.
+        script (Optional[str]): Python scraping script. Saved as script.py so Claude can reuse it without regenerating.
+        schema (Optional[Dict[str, Any]]): JSON output schema. Saved as schema.json.
 
     Returns:
-        Dict[str, Any]: Recipe creation result with ID and prompt_file path.
+        Dict[str, Any]: Recipe creation result with ID and slug.
     """
     data = {
         "site_pattern": site_pattern,
@@ -2851,6 +2855,8 @@ async def save_recipe(
         "api_endpoints": api_endpoints,
         "pagination": pagination,
         "prompt": prompt,
+        "script": script,
+        "schema": schema,
     }
     return await db_save_recipe(data)
 

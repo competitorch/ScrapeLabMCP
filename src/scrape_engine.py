@@ -165,9 +165,15 @@ async def scrape_smart(
     }
 
     if recipe:
-        # Recipe exists: return markdown + recipe prompt
+        # Recipe exists: return markdown + recipe knowledge
         response["recipe_id"] = recipe.get("id")
-        response["recipe_prompt"] = recipe.get("prompt", "")
+        response["recipe_slug"] = recipe.get("_slug", "")
+        if recipe.get("prompt"):
+            response["recipe_prompt"] = recipe["prompt"]
+        if recipe.get("script"):
+            response["recipe_script"] = recipe["script"]
+        if recipe.get("schema"):
+            response["recipe_schema"] = recipe["schema"]
         response["markdown"] = markdown
     else:
         # No recipe: analyze page and return analysis + full markdown
