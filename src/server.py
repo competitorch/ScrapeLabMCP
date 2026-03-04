@@ -2819,11 +2819,13 @@ async def save_recipe(
     geo_target: Optional[str] = None,
     api_endpoints: Optional[List[str]] = None,
     pagination: Optional[Dict[str, Any]] = None,
+    prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Save a scraping recipe after discovery + user validation.
-    The recipe stores HOW to scrape a site (strategy only — level, proxy, wait_for, pagination).
-    Claude decides WHAT to extract.
+    The recipe stores HOW to scrape a site (strategy only — level, proxy, wait_for, pagination)
+    and optionally a prompt (markdown) with extraction instructions.
+    The prompt is saved as a separate .md file in src/data/prompts/.
 
     Args:
         site_pattern (str): URL pattern to match (e.g. 'weroad.it/avventure').
@@ -2834,9 +2836,10 @@ async def save_recipe(
         geo_target (Optional[str]): Country code for geo-targeting (e.g. 'IT', 'US').
         api_endpoints (Optional[List[str]]): Known API endpoints to intercept.
         pagination (Optional[Dict[str, Any]]): Pagination strategy: {type: 'scroll'|'click'|'api', selector: '...'}.
+        prompt (Optional[str]): Markdown extraction instructions. Saved as a separate .md file.
 
     Returns:
-        Dict[str, Any]: Recipe creation result with ID.
+        Dict[str, Any]: Recipe creation result with ID and prompt_file path.
     """
     data = {
         "site_pattern": site_pattern,
@@ -2847,6 +2850,7 @@ async def save_recipe(
         "geo_target": geo_target,
         "api_endpoints": api_endpoints,
         "pagination": pagination,
+        "prompt": prompt,
     }
     return await db_save_recipe(data)
 
