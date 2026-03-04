@@ -1,7 +1,11 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "stealth-browser-mcp"
-version = "0.2.5"
-description = "Ultimate undetectable browser automation MCP server with CDP-level access"
+name = "scrapelab-mcp"
+version = "0.3.0"
+description = "ScrapeLab MCP — smart scraping with recipes, stealth browser, and Supabase backend"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -24,7 +28,17 @@ dependencies = [
     "uvicorn[standard]==0.35.0",
     "httpx==0.28.1",
     "aiosqlite==0.21.0",
+    "html2text>=2024.2.26",
 ]
+
+[project.scripts]
+scrapelab-mcp = "src._entry:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 # Development dependencies (optional)
 [project.optional-dependencies]

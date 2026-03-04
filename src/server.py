@@ -3011,9 +3011,10 @@ def get_scraping_workflow() -> Dict[str, Any]:
     }
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for uvx / pyproject.toml [project.scripts]."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Stealth Browser MCP Server with 90 tools")
     parser.add_argument("--transport", choices=["stdio", "http", "sse"], default="stdio",
                       help="Transport protocol to use")
@@ -3113,3 +3114,7 @@ if __name__ == "__main__":
         mcp.run(transport="sse", host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
