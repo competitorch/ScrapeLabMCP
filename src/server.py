@@ -2761,15 +2761,19 @@ def validate_hook_function(function_code: str) -> Dict[str, Any]:
 async def scrape_url(url: str, headless: bool = True) -> Dict[str, Any]:
     """
     Scrape any URL and extract structured data.
-    For sites with a saved recipe, returns cleaned HTML + recipe extraction prompt.
-    For unknown sites, returns page analysis with JSON-LD, APIs found, and HTML preview.
+    ALWAYS use this tool first when scraping — do NOT manually spawn browsers or search for APIs.
+
+    If a saved recipe exists with a Python script, this tool auto-executes it server-side
+    and returns fully structured data (engine="recipe_script"). No browser needed.
+
+    Fallback chain: recipe script → HTTP fetch → browser stealth.
 
     Args:
         url (str): The URL to scrape.
         headless (bool): Run browser in headless mode (default True).
 
     Returns:
-        Dict[str, Any]: Scraped data with engine info, analysis or recipe prompt.
+        Dict[str, Any]: Structured data (if recipe script), or HTML/markdown with analysis.
     """
     recipe = await match_recipe(url)
     if recipe and recipe.get("id"):
