@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "url": { "type": "string" },
+    "slug": { "type": "string" },
+    "travelTitle": { "type": "string" },
+    "numberOfDays": { "type": "integer" },
+    "totalDepartures": { "type": "integer" },
+    "departures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "startingDate": { "type": "string", "format": "date" },
+          "endingDate": { "type": "string", "format": "date" },
+          "priceEUR": { "type": "integer" },
+          "priceCHF": { "type": "integer" },
+          "depositEUR": { "type": "integer" },
+          "salesStatus": {
+            "type": "string",
+            "enum": ["CONFIRMED", "ALMOST_CONFIRMED", "PLANNED", "ALMOST_FULL", "WAITING_LIST"]
+          },
+          "ageBadge": { "type": "string" },
+          "coordinator": { "type": ["string", "null"] },
+          "interestedCount": { "type": ["integer", "null"] },
+          "expectedGroupSize": { "type": "integer" },
+          "seatsToConfirm": { "type": ["integer", "null"] },
+          "freeSeats": { "type": ["integer", "null"] }
+        },
+        "required": ["startingDate", "priceEUR", "salesStatus"]
+      }
+    }
+  }
+}

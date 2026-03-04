@@ -44,10 +44,17 @@ def parse_departures(html: str, url: str) -> dict:
     # --- Departures from the list section ---
     departures = []
 
-    # Split HTML by "Prenota ora" to get individual departure blocks (preserving HTML for coordinator links)
-    html_blocks = re.split(r'Prenota ora', html)
+    # Split HTML by action buttons, capturing the delimiter to know the status
+    # "Prenota ora" = available/last_spots, "Sold out" = sold_out
+    parts = re.split(r'(Prenota\s+ora|Sold\s*out)', html)
 
-    for html_block in html_blocks:
+    # parts = [block0, delimiter0, block1, delimiter1, ...]
+    # Each block at index i is followed by its delimiter at index i+1
+    for i in range(0, len(parts) - 1, 2):
+        html_block = parts[i]
+        delimiter = parts[i + 1] if i + 1 < len(parts) else ""
+        is_sold_out = bool(re.match(r'Sold\s*out', delimiter, re.IGNORECASE))
+
         # Strip tags for text parsing
         block = re.sub(r'<[^>]+>', ' ', html_block)
         block = re.sub(r'\s+', ' ', block)
@@ -94,17 +101,18 @@ def parse_departures(html: str, url: str) -> dict:
         deposit_m = re.search(r'Acconto\s+(\d+)\s*€', after_date)
         deposit = int(deposit_m.group(1)) if deposit_m else None
 
-        # Status
+        # Status — determined by the delimiter that follows this block
         status = "available"
         spots_left = None
-        spots_n = re.search(r'Ultimi\s+(\d+)\s+posti', block, re.IGNORECASE)
-        if spots_n:
-            status = "last_spots"
-            spots_left = int(spots_n.group(1))
-        elif re.search(r'Ultimi\s+posti', block, re.IGNORECASE):
-            status = "last_spots"
-        elif re.search(r'Sold\s*out', block, re.IGNORECASE):
+        if is_sold_out:
             status = "sold_out"
+        else:
+            spots_n = re.search(r'Ultimi\s+(\d+)\s+posti', block, re.IGNORECASE)
+            if spots_n:
+                status = "last_spots"
+                spots_left = int(spots_n.group(1))
+            elif re.search(r'Ultimi\s+posti', block, re.IGNORECASE):
+                status = "last_spots"
 
         dep = {
             "departureDate": f"{year}-{month:02d}-{day:02d}",
