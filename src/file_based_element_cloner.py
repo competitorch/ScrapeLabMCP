@@ -28,8 +28,8 @@ class FileBasedElementCloner:
         Args:
             output_dir (str): Directory to save clone files.
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.output_dir = Path(output_dir) if Path(output_dir).is_absolute() else Path(__file__).parent / output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.comprehensive_cloner = ComprehensiveElementCloner()
     
     def _safe_process_framework_handlers(self, framework_handlers):

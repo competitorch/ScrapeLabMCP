@@ -6,6 +6,7 @@ import random
 import re
 from typing import Optional, Dict, Any, List
 
+import html2text
 import httpx
 
 from debug_logger import debug_logger
@@ -33,7 +34,6 @@ def _random_headers() -> dict:
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": random.choice(ACCEPT_LANGUAGES),
-        "Accept-Encoding": "gzip, deflate, br",
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
@@ -46,20 +46,24 @@ def _random_headers() -> dict:
 async def http_fetch(url: str, proxy: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Try HTTP-only fetch. Returns dict with html/status/engine or None if quality check fails."""
     try:
+        headers = _random_headers()
         async with httpx.AsyncClient(
-            headers=_random_headers(),
             follow_redirects=True,
             timeout=30.0,
             proxy=proxy,
         ) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, headers=headers)
 
         if resp.status_code >= 400:
             return None
 
         html = resp.text
         lower = html.lower()
+
+        # Quality check: must have real HTML, not binary garbage
         if len(html) < 500 or "captcha" in lower or "cf-browser-verification" in lower:
+            return None
+        if "<html" not in lower and "<!doctype" not in lower:
             return None
 
         return {"html": html, "status": resp.status_code, "engine": "httpx"}
@@ -150,28 +154,28 @@ async def scrape_smart(
         result = await browser_fetch(url, browser_manager, wait_for=wait_for, headless=headless)
 
     html = result.get("html", "")
-    cleaned = clean_html(html)
+    markdown = html_to_markdown(html)
 
     # Build response
     response = {
         "url": url,
         "engine": result.get("engine", "unknown"),
         "html_size": len(html),
-        "cleaned_size": len(cleaned),
+        "markdown_size": len(markdown),
     }
 
     if recipe:
-        # Recipe exists: return cleaned HTML + recipe prompt
+        # Recipe exists: return markdown + recipe prompt
         response["recipe_id"] = recipe.get("id")
         response["recipe_prompt"] = recipe.get("prompt", "")
-        response["html"] = cleaned
+        response["markdown"] = markdown
     else:
-        # No recipe: analyze page and return analysis + preview
+        # No recipe: analyze page and return analysis + full markdown
         analysis = analyze_page(html, url)
         analysis["engine"] = result.get("engine", "unknown")
         response["analysis"] = analysis
-        response["html_preview"] = cleaned[:150_000]
-        response["message"] = "No recipe for this site. Analyze the data and consider creating a recipe with save_recipe."
+        response["markdown"] = markdown
+        response["message"] = "No recipe for this site. Review the markdown and consider saving a recipe with save_recipe."
 
     return response
 
@@ -231,7 +235,24 @@ def analyze_page(html: str, url: str) -> Dict[str, Any]:
     return result
 
 
-# --- HTML cleaning ---
+# --- HTML to Markdown ---
+
+_h2t = html2text.HTML2Text()
+_h2t.ignore_links = False
+_h2t.ignore_images = True
+_h2t.ignore_emphasis = False
+_h2t.body_width = 0
+
+
+def html_to_markdown(html: str) -> str:
+    """Convert HTML to compact Markdown. Strips nav/footer/script/style first."""
+    c = html
+    for tag in ("script", "style", "svg", "noscript", "nav", "footer", "header"):
+        c = re.sub(rf"<{tag}[\s\S]*?</{tag}>", "", c, flags=re.I)
+    c = re.sub(r"<!--[\s\S]*?-->", "", c)
+    md = _h2t.handle(c)
+    md = re.sub(r"\n{3,}", "\n\n", md)
+    return md.strip()
 
 
 def clean_html(html: str) -> str:
