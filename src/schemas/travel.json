@@ -1,0 +1,20 @@
+{
+  "description": "Travel tour departure schema — standardized across all travel sites",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "tourName": { "type": "string", "description": "Tour name" },
+      "tourUrl": { "type": "string", "description": "Tour page URL" },
+      "departureDate": { "type": "string", "description": "Departure date (YYYY-MM-DD)" },
+      "endDate": { "type": "string", "description": "End date (YYYY-MM-DD)" },
+      "price": { "type": "number", "description": "Price in base currency" },
+      "currency": { "type": "string", "description": "Currency code (EUR, USD, GBP)" },
+      "spacesLeft": { "type": "number", "description": "Available spaces (-1 if unknown)" },
+      "status": { "type": "string", "enum": ["available", "sold_out", "on_request", "guaranteed"], "description": "Departure status" },
+      "discount": { "type": "number", "description": "Discount percentage (0 if none)" },
+      "originalPrice": { "type": "number", "description": "Original price before discount" }
+    },
+    "required": ["tourName", "departureDate", "price", "currency", "status"]
+  }
+}

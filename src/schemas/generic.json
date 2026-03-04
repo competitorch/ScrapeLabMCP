@@ -1,0 +1,15 @@
+{
+  "description": "Generic extraction schema — adapt fields to the target site",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "title": { "type": "string", "description": "Item title or name" },
+      "url": { "type": "string", "description": "Item URL" },
+      "price": { "type": "string", "description": "Price with currency" },
+      "description": { "type": "string", "description": "Short description" },
+      "image": { "type": "string", "description": "Image URL" },
+      "metadata": { "type": "object", "description": "Any additional fields" }
+    }
+  }
+}

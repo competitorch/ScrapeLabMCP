@@ -1,0 +1,22 @@
+{
+  "description": "E-commerce product schema — works with Shopify, WooCommerce, Magento, custom stores",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string", "description": "Product name" },
+      "url": { "type": "string", "description": "Product page URL" },
+      "price": { "type": "number", "description": "Current price" },
+      "currency": { "type": "string", "description": "Currency code" },
+      "originalPrice": { "type": "number", "description": "Original price before discount" },
+      "sku": { "type": "string", "description": "SKU or product ID" },
+      "availability": { "type": "string", "enum": ["in_stock", "out_of_stock", "preorder"], "description": "Stock status" },
+      "category": { "type": "string", "description": "Product category" },
+      "brand": { "type": "string", "description": "Brand name" },
+      "image": { "type": "string", "description": "Main product image URL" },
+      "rating": { "type": "number", "description": "Average rating (0-5)" },
+      "reviewCount": { "type": "number", "description": "Number of reviews" }
+    },
+    "required": ["name", "price", "currency"]
+  }
+}
