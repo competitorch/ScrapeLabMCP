@@ -38,7 +38,7 @@ from persistent_storage import persistent_storage
 from progressive_element_cloner import progressive_element_cloner
 from response_handler import response_handler
 from platform_utils import validate_browser_environment, get_platform_info
-from recipe_db import init_db, close_db, match_recipe, save_recipe as db_save_recipe, list_recipes as db_list_recipes, delete_recipe as db_delete_recipe, increment_usage
+from recipe_db import init_db, close_db, match_recipe, save_recipe as db_save_recipe, list_recipes as db_list_recipes, delete_recipe as db_delete_recipe, increment_usage, get_recipe_history, get_recipe
 from scrape_engine import scrape_smart, batch_scrape, analyze_page, clean_html, http_fetch, browser_fetch
 from knowledge_loader import specialists, schemas, agent_workflow, VALID_SPECIALISTS, VALID_SCHEMAS
 from process_cleanup import process_cleanup
@@ -2876,6 +2876,28 @@ async def delete_recipe(recipe_id: int) -> Dict[str, Any]:
     if deleted:
         return {"deleted": True, "recipe_id": recipe_id}
     return {"deleted": False, "error": f"Recipe {recipe_id} not found"}
+
+
+@section_tool("scraping")
+async def recipe_history(recipe_id: int) -> Dict[str, Any]:
+    """
+    Get version history for a recipe. Shows all previous versions saved
+    automatically when a recipe is updated.
+
+    Args:
+        recipe_id (int): The recipe ID to get history for.
+
+    Returns:
+        Dict[str, Any]: Version history with prompt/script/schema diffs.
+    """
+    history = await get_recipe_history(recipe_id)
+    current = await get_recipe(recipe_id)
+    return {
+        "recipe_id": recipe_id,
+        "current_version": current.get("version") if current else None,
+        "history_count": len(history),
+        "history": history,
+    }
 
 
 @section_tool("scraping")

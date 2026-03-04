@@ -1,64 +1,68 @@
-"""Recipe database — site bundle folders for scraping recipes (shared across all users).
+"""Recipe database — Supabase PostgREST backend for scraping recipes.
 
-Each site gets its own folder under src/data/sites/{slug}/ with:
-  - config.json   → metadata + scraping strategy
-  - prompt.md     → extraction instructions for the LLM
-  - script.py     → executable scraping/parsing code (optional)
-  - schema.json   → output schema (optional)
+Uses the Supabase REST API (PostgREST) via httpx.
+Tables: recipes, recipe_history (auto-populated by DB trigger on update).
+
+Environment variables:
+  SUPABASE_URL          — e.g. https://xxxxx.supabase.co
+  SUPABASE_SERVICE_KEY  — service_role key (bypasses RLS)
 """
 
 import json
+import os
 import re
-from pathlib import Path
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 
-SITES_DIR = Path(__file__).parent / "data" / "sites"
+import httpx
 
-_recipes: List[Dict[str, Any]] = []
+# --- Supabase config (read lazily so env can be set before init) ---
 
-
-def _slugify(name: str) -> str:
-    """Generate a clean folder name from site_name."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+_supabase_url: str = ""
+_supabase_key: str = ""
+_client: Optional[httpx.AsyncClient] = None
 
 
-def _load_config(site_dir: Path) -> Optional[Dict[str, Any]]:
-    """Load config.json from a site bundle."""
-    config_path = site_dir / "config.json"
-    if not config_path.exists():
-        return None
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        config["_dir"] = str(site_dir)
-        config["_slug"] = site_dir.name
-        return config
-    except (json.JSONDecodeError, OSError):
-        return None
+def _headers() -> Dict[str, str]:
+    return {
+        "apikey": _supabase_key,
+        "Authorization": f"Bearer {_supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
 
 
-def _save_config(site_dir: Path, config: Dict[str, Any]):
-    """Save config.json to a site bundle."""
-    site_dir.mkdir(parents=True, exist_ok=True)
-    # Don't persist internal fields
-    clean = {k: v for k, v in config.items() if not k.startswith("_")}
-    (site_dir / "config.json").write_text(
-        json.dumps(clean, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+def _rest_url(table: str) -> str:
+    return f"{_supabase_url}/rest/v1/{table}"
 
 
-def _load_all() -> List[Dict[str, Any]]:
-    """Scan all site bundles and load configs."""
-    if not SITES_DIR.exists():
-        return []
-    recipes = []
-    for site_dir in sorted(SITES_DIR.iterdir()):
-        if site_dir.is_dir():
-            config = _load_config(site_dir)
-            if config:
-                recipes.append(config)
-    return recipes
+async def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(headers=_headers(), timeout=15)
+    return _client
+
+
+# --- Public API ---
+
+
+async def init_db():
+    """Initialize the httpx client. Call once at server startup."""
+    global _supabase_url, _supabase_key
+    _supabase_url = os.getenv("SUPABASE_URL", "")
+    _supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
+    if not _supabase_url or not _supabase_key:
+        print("[recipe_db] WARNING: SUPABASE_URL or SUPABASE_SERVICE_KEY not set. Recipe DB disabled.")
+        return
+    await _get_client()
+    print(f"[recipe_db] Connected to Supabase: {_supabase_url}")
+
+
+async def close_db():
+    """Close the httpx client."""
+    global _client
+    if _client and not _client.is_closed:
+        await _client.aclose()
+        _client = None
 
 
 def _extract_domain(url: str) -> str:
@@ -67,192 +71,171 @@ def _extract_domain(url: str) -> str:
     return clean.rstrip("/")
 
 
-def _next_id() -> int:
-    """Get next available ID."""
-    if not _recipes:
-        return 1
-    return max(r.get("id", 0) for r in _recipes) + 1
-
-
-def _load_file(site_dir: Path, filename: str) -> str:
-    """Load a text file from a site bundle. Returns empty string if missing."""
-    path = Path(site_dir) / filename
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-
-
-def _save_file(site_dir: Path, filename: str, content: str):
-    """Save a text file to a site bundle."""
-    Path(site_dir).mkdir(parents=True, exist_ok=True)
-    (Path(site_dir) / filename).write_text(content, encoding="utf-8")
-
-
-def _delete_dir(site_dir: Path):
-    """Delete a site bundle directory."""
-    import shutil
-    if site_dir.exists():
-        shutil.rmtree(site_dir)
-
-
-# --- Public API (async interface for compatibility with server.py) ---
-
-
-async def init_db():
-    """Load all site bundles. Call once at server startup."""
-    global _recipes
-    SITES_DIR.mkdir(parents=True, exist_ok=True)
-    _recipes = _load_all()
-
-
-async def close_db():
-    """No-op — site bundles are saved on each write."""
-    pass
-
-
 async def match_recipe(url: str) -> Optional[Dict[str, Any]]:
-    """Find a recipe matching the given URL. Loads prompt and script from files."""
+    """Find a recipe matching the given URL.
+
+    Fetches all recipes and does pattern matching in Python
+    (PostgREST doesn't support reverse LIKE easily).
+    """
+    client = await _get_client()
     url_clean = _extract_domain(url)
+
+    resp = await client.get(
+        _rest_url("recipes"),
+        params={"select": "*", "order": "times_used.desc"},
+    )
+    if resp.status_code != 200:
+        return None
+
+    recipes = resp.json()
     best = None
-    for r in _recipes:
+    for r in recipes:
         pattern = r.get("site_pattern", "")
         if pattern in url_clean or url_clean in pattern:
-            if best is None or r.get("times_used", 0) > best.get("times_used", 0):
+            if best is None or (r.get("times_used", 0) > best.get("times_used", 0)):
                 best = r
     if best is None:
         return None
 
-    # Hydrate: load prompt, script, schema from files
-    site_dir = Path(best["_dir"])
-    result = dict(best)
-    result["prompt"] = _load_file(site_dir, "prompt.md")
-    result["script"] = _load_file(site_dir, "script.py")
-    schema_str = _load_file(site_dir, "schema.json")
-    if schema_str:
+    # Deserialize config jsonb fields
+    if isinstance(best.get("config"), str):
         try:
-            result["schema"] = json.loads(schema_str)
-        except json.JSONDecodeError:
-            result["schema"] = None
-    else:
-        result["schema"] = None
-    return result
+            best["config"] = json.loads(best["config"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return best
 
 
 async def save_recipe(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Save or update a site bundle. Upserts on site_pattern."""
+    """Save or update a recipe. Upserts on site_pattern."""
+    client = await _get_client()
     pattern = data["site_pattern"]
-    site_name = data.get("site_name", pattern)
-    slug = _slugify(site_name)
-    site_dir = SITES_DIR / slug
 
-    # Extract file contents from data
-    prompt = data.pop("prompt", None)
-    script = data.pop("script", None)
-    schema = data.pop("schema", None)
+    # Check if exists
+    resp = await client.get(
+        _rest_url("recipes"),
+        params={"site_pattern": f"eq.{pattern}", "select": "id,version"},
+    )
+    existing = resp.json() if resp.status_code == 200 else []
 
-    # Check if exists (by pattern)
-    existing = None
-    for r in _recipes:
-        if r.get("site_pattern") == pattern:
-            existing = r
-            site_dir = Path(r["_dir"])  # Use existing directory
-            break
+    # Build config jsonb from extra fields
+    config = {}
+    for key in ("wait_for", "needs_proxy", "geo_target", "api_endpoints", "pagination"):
+        if data.get(key) is not None:
+            config[key] = data[key]
+
+    row = {
+        "site_pattern": pattern,
+        "site_name": data.get("site_name", pattern),
+        "scrape_level": data.get("scrape_level", 2),
+        "prompt": data.get("prompt"),
+        "script": data.get("script"),
+        "schema": data.get("schema"),
+        "config": config if config else {},
+    }
 
     if existing:
-        # Update existing
-        existing.update({
-            "site_name": data.get("site_name", existing.get("site_name")),
-            "scrape_level": data.get("scrape_level", existing.get("scrape_level", 2)),
-            "wait_for": data.get("wait_for"),
-            "needs_proxy": data.get("needs_proxy", 0),
-            "geo_target": data.get("geo_target"),
-            "api_endpoints": data.get("api_endpoints"),
-            "pagination": data.get("pagination"),
-            "updated_at": datetime.utcnow().isoformat(),
-        })
-        _save_config(site_dir, existing)
-        recipe_id = existing["id"]
-        created = False
-    else:
-        # Create new
-        config = {
-            "id": _next_id(),
-            "site_pattern": pattern,
-            "site_name": site_name,
-            "scrape_level": data.get("scrape_level", 2),
-            "wait_for": data.get("wait_for"),
-            "needs_proxy": data.get("needs_proxy", 0),
-            "geo_target": data.get("geo_target"),
-            "api_endpoints": data.get("api_endpoints"),
-            "pagination": data.get("pagination"),
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
-            "times_used": 0,
-            "success_rate": 0.0,
+        # UPDATE — history trigger fires automatically
+        recipe_id = existing[0]["id"]
+        resp = await client.patch(
+            _rest_url("recipes"),
+            params={"id": f"eq.{recipe_id}"},
+            json=row,
+        )
+        if resp.status_code not in (200, 204):
+            return {"error": f"Update failed: {resp.text}"}
+        updated = resp.json()
+        return {
+            "id": recipe_id,
+            "created": False,
+            "updated": True,
+            "version": updated[0]["version"] if updated else existing[0].get("version", 1),
         }
-        _save_config(site_dir, config)
-        config["_dir"] = str(site_dir)
-        config["_slug"] = slug
-        _recipes.append(config)
-        recipe_id = config["id"]
-        created = True
-
-    # Save file contents
-    if prompt:
-        _save_file(site_dir, "prompt.md", prompt)
-    if script:
-        _save_file(site_dir, "script.py", script)
-    if schema:
-        schema_str = json.dumps(schema, indent=2, ensure_ascii=False) if isinstance(schema, dict) else schema
-        _save_file(site_dir, "schema.json", schema_str)
-
-    result = {"id": recipe_id, "slug": slug, "created": created, "updated": not created}
-    files = []
-    if prompt:
-        files.append("prompt.md")
-    if script:
-        files.append("script.py")
-    if schema:
-        files.append("schema.json")
-    if files:
-        result["files_saved"] = files
-    return result
+    else:
+        # INSERT
+        resp = await client.post(
+            _rest_url("recipes"),
+            json=row,
+        )
+        if resp.status_code not in (200, 201):
+            return {"error": f"Insert failed: {resp.text}"}
+        created = resp.json()
+        return {
+            "id": created[0]["id"],
+            "created": True,
+            "updated": False,
+            "version": 1,
+        }
 
 
 async def list_recipes() -> List[Dict[str, Any]]:
-    """List all recipes ordered by usage. Includes file availability info."""
-    recipes = sorted(_recipes, key=lambda r: r.get("times_used", 0), reverse=True)
-    result = []
+    """List all recipes ordered by usage."""
+    client = await _get_client()
+    resp = await client.get(
+        _rest_url("recipes"),
+        params={"select": "*", "order": "times_used.desc"},
+    )
+    if resp.status_code != 200:
+        return []
+    recipes = resp.json()
+    # Add convenience flags
     for r in recipes:
-        entry = {k: v for k, v in r.items() if not k.startswith("_")}
-        site_dir = Path(r["_dir"])
-        entry["slug"] = r.get("_slug", "")
-        entry["has_prompt"] = (site_dir / "prompt.md").exists()
-        entry["has_script"] = (site_dir / "script.py").exists()
-        entry["has_schema"] = (site_dir / "schema.json").exists()
-        result.append(entry)
-    return result
+        r["has_prompt"] = bool(r.get("prompt"))
+        r["has_script"] = bool(r.get("script"))
+        r["has_schema"] = bool(r.get("schema"))
+    return recipes
+
+
+async def get_recipe(recipe_id: int) -> Optional[Dict[str, Any]]:
+    """Get a single recipe by ID."""
+    client = await _get_client()
+    resp = await client.get(
+        _rest_url("recipes"),
+        params={"id": f"eq.{recipe_id}", "select": "*"},
+    )
+    if resp.status_code != 200:
+        return None
+    rows = resp.json()
+    return rows[0] if rows else None
 
 
 async def delete_recipe(recipe_id: int) -> bool:
-    """Delete a site bundle by recipe ID."""
-    global _recipes
-    for r in _recipes:
-        if r.get("id") == recipe_id:
-            site_dir = Path(r["_dir"])
-            _delete_dir(site_dir)
-            _recipes = [x for x in _recipes if x.get("id") != recipe_id]
-            return True
-    return False
+    """Delete a recipe by ID."""
+    client = await _get_client()
+    resp = await client.delete(
+        _rest_url("recipes"),
+        params={"id": f"eq.{recipe_id}"},
+    )
+    return resp.status_code in (200, 204)
 
 
 async def increment_usage(recipe_id: int):
     """Increment times_used for a recipe."""
-    for r in _recipes:
-        if r.get("id") == recipe_id:
-            r["times_used"] = r.get("times_used", 0) + 1
-            _save_config(Path(r["_dir"]), r)
-            break
+    client = await _get_client()
+    # Read current value, then update (PostgREST doesn't support atomic increment easily)
+    recipe = await get_recipe(recipe_id)
+    if recipe:
+        new_count = recipe.get("times_used", 0) + 1
+        await client.patch(
+            _rest_url("recipes"),
+            params={"id": f"eq.{recipe_id}"},
+            json={"times_used": new_count},
+            headers={**_headers(), "Prefer": "return=minimal"},
+        )
+
+
+async def get_recipe_history(recipe_id: int) -> List[Dict[str, Any]]:
+    """Get version history for a recipe."""
+    client = await _get_client()
+    resp = await client.get(
+        _rest_url("recipe_history"),
+        params={
+            "recipe_id": f"eq.{recipe_id}",
+            "select": "*",
+            "order": "version.desc",
+        },
+    )
+    if resp.status_code != 200:
+        return []
+    return resp.json()

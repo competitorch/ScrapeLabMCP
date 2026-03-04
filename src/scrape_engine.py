@@ -130,6 +130,38 @@ async def browser_fetch(
 # --- Smart scrape (main entry point) ---
 
 
+async def _run_recipe_script(script_code: str, url: str) -> Optional[Dict[str, Any]]:
+    """Execute a recipe's scrape() function in an isolated namespace.
+
+    The script must define an async function `scrape(url) -> dict`.
+    Returns the dict on success, None on error.
+    """
+    namespace: Dict[str, Any] = {}
+    try:
+        exec(script_code, namespace)
+    except Exception as e:
+        debug_logger.log_info("scrape_engine", "recipe_script", f"exec() failed: {e}")
+        return None
+
+    scrape_fn = namespace.get("scrape")
+    if not callable(scrape_fn):
+        debug_logger.log_info("scrape_engine", "recipe_script", "No scrape() function found in script")
+        return None
+
+    try:
+        result = await asyncio.wait_for(scrape_fn(url), timeout=60.0)
+        if isinstance(result, dict):
+            return result
+        debug_logger.log_info("scrape_engine", "recipe_script", f"scrape() returned {type(result)}, expected dict")
+        return None
+    except asyncio.TimeoutError:
+        debug_logger.log_info("scrape_engine", "recipe_script", "scrape() timed out after 60s")
+        return None
+    except Exception as e:
+        debug_logger.log_info("scrape_engine", "recipe_script", f"scrape() raised: {e}")
+        return None
+
+
 async def scrape_smart(
     url: str,
     browser_manager,
@@ -137,9 +169,24 @@ async def scrape_smart(
     headless: bool = True,
 ) -> Dict[str, Any]:
     """
-    Smart scrape: recipe check -> HTTP fast-path -> browser fallback.
-    Returns dict with html, engine, analysis or recipe_prompt.
+    Smart scrape: recipe script -> HTTP fast-path -> browser fallback.
+    Returns dict with structured data (if script), or html/markdown + analysis.
     """
+
+    # Step 0: Recipe has a script with scrape() → execute it directly
+    if recipe and recipe.get("script"):
+        script_result = await _run_recipe_script(recipe["script"], url)
+        if script_result is not None:
+            response = {
+                "url": url,
+                "engine": "recipe_script",
+                "recipe_id": recipe.get("id"),
+                "data": script_result,
+            }
+            if recipe.get("schema"):
+                response["recipe_schema"] = recipe["schema"]
+            return response
+
     wait_for = recipe.get("wait_for") if recipe else None
     scrape_level = recipe.get("scrape_level", 1) if recipe else 1
 
@@ -165,13 +212,10 @@ async def scrape_smart(
     }
 
     if recipe:
-        # Recipe exists: return markdown + recipe knowledge
+        # Recipe exists but script failed or absent: return markdown + recipe knowledge
         response["recipe_id"] = recipe.get("id")
-        response["recipe_slug"] = recipe.get("_slug", "")
         if recipe.get("prompt"):
             response["recipe_prompt"] = recipe["prompt"]
-        if recipe.get("script"):
-            response["recipe_script"] = recipe["script"]
         if recipe.get("schema"):
             response["recipe_schema"] = recipe["schema"]
         response["markdown"] = markdown
