@@ -1,9 +1,11 @@
 """Scrape engine — HTTP fast-path, browser fallback, page analysis."""
 
 import asyncio
+import inspect
 import json
 import random
 import re
+import sys
 from typing import Optional, Dict, Any, List
 
 import html2text
@@ -127,39 +129,158 @@ async def browser_fetch(
             pass
 
 
+# --- Playwright-to-nodriver adapter for recipe scripts ---
+
+
+class _PageAdapter:
+    """Wraps a nodriver tab to provide a Playwright-like Page API."""
+
+    def __init__(self, tab):
+        self._tab = tab
+
+    async def goto(self, url: str, **kwargs):
+        """Navigate to URL. Accepts wait_until/timeout for Playwright compat."""
+        await self._tab.get(url)
+        await self._tab.sleep(2)  # settle time
+
+    async def wait_for_selector(self, selector: str, timeout: int = 15000):
+        """Wait for a CSS selector to appear."""
+        try:
+            await asyncio.wait_for(
+                self._tab.select(selector), timeout=timeout / 1000
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Selector '{selector}' not found within {timeout}ms")
+
+    async def evaluate(self, js_code: str):
+        """Evaluate JavaScript in page context."""
+        return await self._tab.evaluate(js_code)
+
+    async def query_selector(self, selector: str):
+        """Query a single element."""
+        try:
+            return await self._tab.select(selector)
+        except Exception:
+            return None
+
+    async def query_selector_all(self, selector: str):
+        """Query all matching elements."""
+        try:
+            return await self._tab.select_all(selector)
+        except Exception:
+            return []
+
+    async def close(self):
+        """No-op — cleanup handled by _run_recipe_script's finally block."""
+        pass
+
+
+class _BrowserAdapter:
+    """Wraps a nodriver tab to provide a Playwright-like Browser API."""
+
+    def __init__(self, tab):
+        self._tab = tab
+        self._page = _PageAdapter(tab)
+
+    async def new_page(self):
+        """Return the existing page adapter (nodriver uses single-tab model)."""
+        return self._page
+
+
 # --- Smart scrape (main entry point) ---
 
 
-async def _run_recipe_script(script_code: str, url: str) -> Optional[Dict[str, Any]]:
+async def _run_recipe_script(
+    script_code: str,
+    url: str,
+    browser_manager=None,
+    headless: bool = True,
+) -> Optional[Dict[str, Any]]:
     """Execute a recipe's scrape() function in an isolated namespace.
 
-    The script must define an async function `scrape(url) -> dict`.
+    Supports two signatures:
+      - scrape(url) → pure HTTP script (no browser needed)
+      - scrape(browser, url) → browser-based script (spawns a browser instance)
+
     Returns the dict on success, None on error.
     """
     namespace: Dict[str, Any] = {}
     try:
         exec(script_code, namespace)
     except Exception as e:
+        print(f"[recipe_script] exec() failed: {e}", file=sys.stderr)
         debug_logger.log_info("scrape_engine", "recipe_script", f"exec() failed: {e}")
         return None
 
     scrape_fn = namespace.get("scrape")
     if not callable(scrape_fn):
+        print("[recipe_script] No scrape() function found in script", file=sys.stderr)
         debug_logger.log_info("scrape_engine", "recipe_script", "No scrape() function found in script")
         return None
 
+    # Inspect signature to determine call mode
     try:
-        result = await asyncio.wait_for(scrape_fn(url), timeout=60.0)
+        sig = inspect.signature(scrape_fn)
+        param_count = len(sig.parameters)
+    except (ValueError, TypeError):
+        param_count = 1  # default to url-only
+
+    needs_browser = param_count >= 2
+    print(f"[recipe_script] scrape() has {param_count} params → {'browser+url' if needs_browser else 'url-only'}", file=sys.stderr)
+
+    instance_id = None
+    try:
+        if needs_browser:
+            if browser_manager is None:
+                print("[recipe_script] Script needs browser but no browser_manager available", file=sys.stderr)
+                return None
+
+            # Spawn a browser for the script
+            from models import BrowserOptions
+            options = BrowserOptions(
+                headless=headless,
+                block_resources=["font", "media"],
+                viewport_width=1280,
+                viewport_height=800,
+            )
+            instance = await browser_manager.spawn_browser(options)
+            instance_id = instance.instance_id
+            tab = await browser_manager.get_tab(instance_id)
+            if not tab:
+                print(f"[recipe_script] Failed to get tab for {instance_id}", file=sys.stderr)
+                return None
+
+            # Wrap tab in Playwright-compatible adapter and pass to script
+            browser_adapter = _BrowserAdapter(tab)
+            result = await asyncio.wait_for(scrape_fn(browser_adapter, url), timeout=90.0)
+        else:
+            result = await asyncio.wait_for(scrape_fn(url), timeout=60.0)
+
         if isinstance(result, dict):
+            print(f"[recipe_script] Success — got dict with {len(result)} keys", file=sys.stderr)
             return result
-        debug_logger.log_info("scrape_engine", "recipe_script", f"scrape() returned {type(result)}, expected dict")
+        if isinstance(result, list):
+            print(f"[recipe_script] Success — got list with {len(result)} items, wrapping in dict", file=sys.stderr)
+            return {"data": result}
+
+        print(f"[recipe_script] scrape() returned {type(result)}, expected dict/list", file=sys.stderr)
+        debug_logger.log_info("scrape_engine", "recipe_script", f"scrape() returned {type(result)}")
         return None
     except asyncio.TimeoutError:
-        debug_logger.log_info("scrape_engine", "recipe_script", "scrape() timed out after 60s")
+        print(f"[recipe_script] scrape() timed out after {'90s' if needs_browser else '60s'}", file=sys.stderr)
+        debug_logger.log_info("scrape_engine", "recipe_script", "scrape() timed out")
         return None
     except Exception as e:
+        print(f"[recipe_script] scrape() raised: {type(e).__name__}: {e}", file=sys.stderr)
         debug_logger.log_info("scrape_engine", "recipe_script", f"scrape() raised: {e}")
         return None
+    finally:
+        # Clean up browser if we spawned one
+        if instance_id and browser_manager:
+            try:
+                await browser_manager.close_instance(instance_id)
+            except Exception:
+                pass
 
 
 async def scrape_smart(
@@ -175,7 +296,11 @@ async def scrape_smart(
 
     # Step 0: Recipe has a script with scrape() → execute it directly
     if recipe and recipe.get("script"):
-        script_result = await _run_recipe_script(recipe["script"], url)
+        script_result = await _run_recipe_script(
+            recipe["script"], url,
+            browser_manager=browser_manager,
+            headless=headless,
+        )
         if script_result is not None:
             response = {
                 "url": url,
@@ -187,7 +312,9 @@ async def scrape_smart(
                 response["recipe_schema"] = recipe["schema"]
             return response
 
-    wait_for = recipe.get("wait_for") if recipe else None
+    # Extract wait_for from recipe config (nested in config dict)
+    config = recipe.get("config", {}) if recipe else {}
+    wait_for = recipe.get("wait_for") or config.get("wait_for") if recipe else None
     scrape_level = recipe.get("scrape_level", 1) if recipe else 1
 
     result = None
@@ -332,40 +459,116 @@ async def batch_scrape(
 ) -> List[Dict[str, Any]]:
     """
     Batch scrape multiple URLs.
-    Strategy: try all URLs with HTTP in parallel first, then browser for failures.
-    Returns lightweight results (analysis + markdown_preview) to stay under MCP size limits.
-    Use scrape_smart() on individual URLs for full markdown content.
+    Strategy: recipe script (parallel) -> HTTP (parallel) -> browser (sequential).
+    If recipe has a script, executes it for all URLs first.
+    Returns structured data (if script) or lightweight HTML results.
     """
     results: Dict[str, Dict[str, Any]] = {}
-    wait_for = recipe.get("wait_for") if recipe else None
+    config = recipe.get("config", {}) if recipe else {}
+    wait_for = recipe.get("wait_for") or config.get("wait_for") if recipe else None
+    scrape_level = recipe.get("scrape_level", 1) if recipe else 1
 
-    # Phase 1: parallel HTTP for all URLs
-    semaphore = asyncio.Semaphore(max_concurrent_http)
+    remaining = list(urls)
 
-    async def try_http(url: str):
-        async with semaphore:
-            return url, await http_fetch(url)
+    # Phase 0: Recipe script (parallel for HTTP-only scripts)
+    if recipe and recipe.get("script"):
+        script_code = recipe["script"]
 
-    http_tasks = [try_http(u) for u in urls]
-    http_results = await asyncio.gather(*http_tasks, return_exceptions=True)
-
-    browser_needed = []
-    for item in http_results:
-        if isinstance(item, Exception):
-            continue
-        url, result = item
-        if result is not None:
-            results[url] = _build_batch_result(url, result["html"], "httpx", recipe)
-        else:
-            browser_needed.append(url)
-
-    # Phase 2: sequential browser for failures
-    for url in browser_needed:
+        # Check if script needs browser
+        namespace: Dict[str, Any] = {}
         try:
-            result = await browser_fetch(url, browser_manager, wait_for=wait_for, headless=headless)
-            results[url] = _build_batch_result(url, result["html"], "nodriver", recipe)
+            exec(script_code, namespace)
+            scrape_fn = namespace.get("scrape")
+            if scrape_fn and callable(scrape_fn):
+                sig = inspect.signature(scrape_fn)
+                needs_browser = len(sig.parameters) >= 2
+            else:
+                needs_browser = False
+        except Exception:
+            needs_browser = False
+
+        if not needs_browser:
+            # HTTP-only script → run all in parallel
+            semaphore = asyncio.Semaphore(max_concurrent_http)
+
+            async def try_script(u: str):
+                async with semaphore:
+                    r = await _run_recipe_script(script_code, u)
+                    return u, r
+
+            script_tasks = [try_script(u) for u in remaining]
+            script_results = await asyncio.gather(*script_tasks, return_exceptions=True)
+
+            still_remaining = []
+            for item in script_results:
+                if isinstance(item, Exception):
+                    continue
+                u, r = item
+                if r is not None:
+                    results[u] = {
+                        "url": u,
+                        "engine": "recipe_script",
+                        "recipe_id": recipe.get("id"),
+                        "data": r,
+                    }
+                else:
+                    still_remaining.append(u)
+
+            remaining = still_remaining
+            print(f"[batch] Phase 0 (script): {len(results)} ok, {len(remaining)} remaining", file=sys.stderr)
+        else:
+            # Browser-based script → run sequentially
+            still_remaining = []
+            for u in remaining:
+                r = await _run_recipe_script(
+                    script_code, u,
+                    browser_manager=browser_manager,
+                    headless=headless,
+                )
+                if r is not None:
+                    results[u] = {
+                        "url": u,
+                        "engine": "recipe_script",
+                        "recipe_id": recipe.get("id"),
+                        "data": r,
+                    }
+                else:
+                    still_remaining.append(u)
+            remaining = still_remaining
+            print(f"[batch] Phase 0 (browser script): {len(results)} ok, {len(remaining)} remaining", file=sys.stderr)
+
+    if not remaining:
+        return [results.get(u, {"url": u, "error": "not processed"}) for u in urls]
+
+    # Phase 1: parallel HTTP for remaining URLs (if level allows)
+    if scrape_level <= 1:
+        semaphore = asyncio.Semaphore(max_concurrent_http)
+
+        async def try_http(url: str):
+            async with semaphore:
+                return url, await http_fetch(url)
+
+        http_tasks = [try_http(u) for u in remaining]
+        http_results = await asyncio.gather(*http_tasks, return_exceptions=True)
+
+        still_remaining = []
+        for item in http_results:
+            if isinstance(item, Exception):
+                continue
+            u, result = item
+            if result is not None:
+                results[u] = _build_batch_result(u, result["html"], "httpx", recipe)
+            else:
+                still_remaining.append(u)
+        remaining = still_remaining
+
+    # Phase 2: sequential browser for remaining
+    for u in remaining:
+        try:
+            result = await browser_fetch(u, browser_manager, wait_for=wait_for, headless=headless)
+            results[u] = _build_batch_result(u, result["html"], "nodriver", recipe)
         except Exception as e:
-            results[url] = {"url": url, "error": str(e)}
+            results[u] = {"url": u, "error": str(e)}
 
     return [results.get(u, {"url": u, "error": "not processed"}) for u in urls]
 

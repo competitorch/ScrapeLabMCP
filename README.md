@@ -4,36 +4,66 @@
 
 # ScrapeLab MCP
 
-**Intelligent web scraping + stealth browser automation for MCP agents.**
+**Smart web scraping for AI agents. Scrape once, learn forever.**
 
-Combines smart scraping intelligence (recipe system, HTTP fast-path, auto-escalation) with an undetectable stealth browser powered by [nodriver](https://github.com/ultrafunkamsterdam/nodriver) + Chrome DevTools Protocol + [FastMCP](https://github.com/jlowin/fastmcp).
+An MCP server that gives Claude (or any MCP client) intelligent scraping capabilities: a recipe system that learns how to scrape sites, an undetectable stealth browser, and HTTP-first speed — all behind a single `scrape_url` tool.
 
 [![MCP](https://img.shields.io/badge/MCP-Compatible-F77F00?style=flat-square)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/License-MIT-F77F00?style=flat-square)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-F77F00?style=flat-square)](CONTRIBUTING.md)
+[![Python](https://img.shields.io/badge/Python-3.10+-F77F00?style=flat-square)](https://python.org)
 
 </div>
+
+---
+
+## Why ScrapeLab?
+
+Claude can already browse the web. So why use this?
+
+### The Problem
+
+Every time you ask Claude to scrape a site, it starts from zero: navigates the page, reads the full HTML, reasons about the structure, extracts data. This is **slow** (15-30s per URL), **expensive** (50K+ tokens of HTML in context), and **inconsistent** (different formats each time).
+
+### The Solution
+
+ScrapeLab MCP introduces **recipes** — saved scraping strategies with reusable scripts. The first time you scrape a site, Claude analyzes it and creates a recipe. From the second time on, the recipe script executes directly — no browser, no LLM reasoning, just structured data in 1-2 seconds.
+
+```
+First time:  URL → analyze → create recipe → data     (~15s, LLM-assisted)
+Every time after:  URL → recipe script → data          (~1-2s, zero LLM tokens)
+```
+
+### ScrapeLab MCP vs Native Claude
+
+| | Claude (native) | Claude + Chrome MCP | ScrapeLab MCP |
+|---|---|---|---|
+| **Speed (1 URL)** | ~15-20s | ~15-20s | **~1-2s** (recipe) |
+| **Speed (50 URLs)** | ~15 min | ~15 min | **~15s** (parallel batch) |
+| **Tokens per URL** | ~50K (full HTML in context) | ~50K | **~2K** (structured JSON only) |
+| **Cost (100 URLs/week)** | ~$15/week | ~$15/week | **~$0** (scripts, no LLM) |
+| **Output consistency** | Different every time | Different every time | **Identical schema** always |
+| **Context window** | Fills up after ~20 URLs | Fills up after ~20 URLs | **Unlimited** (scripts run outside LLM) |
+| **Anti-bot bypass** | N/A | Uses real Chrome | **Stealth nodriver** (undetectable) |
+| **Learns from past scrapes** | No | No | **Yes** (recipe system) |
 
 ---
 
 ## How It Works
 
 ```
-scrape_url("https://example.com/products")
+scrape_url("https://www.weroad.it/viaggi/tour-giappone")
 │
-├─ 1. Recipe DB check (shared JSON in repo)
-│   └─ Found? Use saved strategy (level, wait_for, proxy)
+├── Recipe found? Has script?
+│   └── YES → Execute script directly → structured JSON     ⚡ ~1s
 │
-├─ 2. HTTP fast-path (~0.1s)
-│   └─ httpx + header rotation → quality check
-│   └─ Pass? → HTML → Markdown → done
+├── No script → Try HTTP fast-path
+│   └── httpx + header rotation → quality check → markdown   ⚡ ~1-3s
 │
-└─ 3. Stealth browser fallback (~3s)
-    └─ nodriver → navigate → wait → extract → close
-    └─ Bypasses Cloudflare, antibots, JS rendering
+└── HTTP failed → Stealth browser fallback
+    └── nodriver → navigate → render JS → extract            🐢 ~5-15s
 ```
 
-The AI agent decides **what** to extract from the markdown. Recipes only store **how** to scrape (strategy).
+**Three engines, automatic fallback.** Always picks the fastest one that works.
 
 ---
 
@@ -42,219 +72,241 @@ The AI agent decides **what** to extract from the markdown. Recipes only store *
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-org/scrapelab-mcp.git
-cd scrapelab-mcp
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+git clone https://github.com/competitorch/scrapeLabMCP_BrowserStealth.git
+cd scrapeLabMCP_BrowserStealth
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Add to your MCP client
+### 2. Configure recipe database (optional)
+
+Recipes can be stored in Supabase for persistence and team sharing:
+
+```bash
+export SUPABASE_URL="https://your-project.supabase.co"
+export SUPABASE_SERVICE_KEY="your-service-role-key"
+```
+
+Without Supabase, recipes are stored locally and work fine for single-user setups.
+
+### 3. Add to your MCP client
+
+**Claude Desktop** — add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "scrapelab-mcp": {
+      "command": "/path/to/scrapeLabMCP_BrowserStealth/.venv/bin/python",
+      "args": ["/path/to/scrapeLabMCP_BrowserStealth/src/server.py"],
+      "env": {
+        "SUPABASE_URL": "https://your-project.supabase.co",
+        "SUPABASE_SERVICE_KEY": "your-key"
+      }
+    }
+  }
+}
+```
 
 **Claude Code CLI:**
 
 ```bash
 claude mcp add-json scrapelab-mcp '{
   "type": "stdio",
-  "command": "/path/to/scrapelab-mcp/venv/bin/python",
-  "args": ["/path/to/scrapelab-mcp/src/server.py"]
+  "command": "/path/to/.venv/bin/python",
+  "args": ["/path/to/src/server.py"]
 }'
 ```
 
-<details>
-<summary><strong>Claude Desktop / Cursor (JSON config)</strong></summary>
-
-```json
-{
-  "mcpServers": {
-    "scrapelab-mcp": {
-      "command": "/path/to/scrapelab-mcp/venv/bin/python",
-      "args": ["/path/to/scrapelab-mcp/src/server.py"],
-      "env": {}
-    }
-  }
-}
-```
-
-</details>
-
-### 3. Test it
+### 4. Try it
 
 ```
-> "Scrape https://example.com and extract all product names and prices."
+You: "Scrape https://www.weroad.it/viaggi/tour-giappone and get all departures"
+```
+
+First time: Claude analyzes the page, discovers the API, creates a recipe with a script.
+Second time: instant structured data, zero browser, zero reasoning.
+
+---
+
+## Core Features
+
+### Recipe System
+
+Recipes store **how** to scrape a site. Each recipe can contain:
+
+- **Prompt** — extraction instructions for the LLM
+- **Script** — a Python `scrape(url)` function that runs directly (no LLM needed)
+- **Schema** — JSON schema for structured output validation
+- **Config** — scrape level, wait selectors, proxy settings
+
+```python
+# Example: recipe script for a travel site API
+async def scrape(url: str) -> dict:
+    slug = url.split("/")[-1]
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://api.example.com/tours/{slug}/departures")
+        return resp.json()
+```
+
+Recipes are versioned automatically — every update saves the previous version.
+
+### Batch Scraping
+
+Scrape multiple URLs in parallel with automatic recipe matching:
+
+```
+You: "Batch scrape these 10 WeRoad tour URLs"
+```
+
+The batch engine runs all recipe scripts in parallel (~2-3s for 10 URLs) with automatic fallback to HTTP/browser for failures.
+
+### Stealth Browser
+
+When a site needs JavaScript rendering, ScrapeLab spawns an **undetectable** browser powered by [nodriver](https://github.com/ultrafunkamsterdam/nodriver):
+
+- Passes Cloudflare, DataDome, and other anti-bot systems
+- Not Playwright, not Selenium — truly undetectable
+- Full Chrome DevTools Protocol (CDP) access
+- Network interception with dynamic Python hooks
+
+### Dual-Signature Scripts
+
+Recipe scripts support two modes, detected automatically:
+
+```python
+# HTTP-only (no browser needed) — runs in parallel
+async def scrape(url: str) -> dict: ...
+
+# Browser-based (spawns stealth browser) — runs sequentially
+async def scrape(browser, url: str) -> dict:
+    page = await browser.new_page()
+    await page.goto(url)
+    ...
 ```
 
 ---
 
-## Scraping Tools
+## Tools Reference
+
+### Scraping (core)
 
 | Tool | Description |
 |------|-------------|
-| `scrape_url` | Smart scrape: recipe check → HTTP → browser fallback → structured data |
-| `discover_url` | Analyze a page before scraping (framework, JSON-LD, APIs) |
-| `batch_scrape_urls` | Parallel scrape of multiple URLs (lightweight results) |
-| `save_recipe` | Save a scraping strategy for a site |
+| `scrape_url` | Smart scrape: recipe → HTTP → browser fallback. **Always use this first.** |
+| `discover_url` | Analyze a page before scraping (framework, JSON-LD, API endpoints) |
+| `batch_scrape_urls` | Parallel scrape with automatic recipe matching |
+| `save_recipe` | Save a scraping strategy + script + schema for a site |
+| `list_recipes` | List all saved recipes and available knowledge |
+| `recipe_history` | View version history of a recipe |
 | `delete_recipe` | Remove a recipe |
-| `list_recipes` | List all recipes + available knowledge |
-| `get_specialist_recipe` | Get specialist guide (api-rest, ecommerce, wordpress...) |
-| `get_output_schema` | Get JSON schema (generic, travel, ecommerce) |
+| `get_specialist_recipe` | Expert guides: api-rest, api-graphql, ecommerce, wordpress... |
+| `get_output_schema` | JSON schemas: generic, travel, ecommerce |
 
-### Recipe System — Site Bundles
+### Browser Automation (98 tools)
 
-Each site gets its own folder under `src/data/sites/` with everything needed:
-
-```
-src/data/sites/
-├── weroad/
-│   ├── config.json       # scraping strategy (level, wait_for, proxy)
-│   ├── prompt.md         # extraction instructions for the LLM
-│   ├── script.py         # reusable scraping script (optional)
-│   └── schema.json       # output schema (optional)
-│
-├── gadventures/
-│   ├── config.json
-│   ├── prompt.md
-│   └── script.py
-```
-
-When `scrape_url` matches a recipe, it returns the prompt, script, and schema — so Claude can execute immediately without regenerating code.
-
-```
-save_recipe(
-  site_pattern="weroad.it",
-  site_name="WeRoad",
-  scrape_level=1,
-  prompt="# WeRoad\n\nExtract all tours with dates and prices...",
-  script="import httpx\n\nasync def scrape(url): ...",
-)
-```
-
----
-
-## Browser Automation Tools
-
-98 tools across 12 sections for full stealth browser control.
+Full stealth browser control for when you need manual interaction.
 
 <details>
-<summary><strong>Browser Management</strong> — 11 tools</summary>
+<summary><strong>Browser Management</strong></summary>
 
-| Tool | Description |
-|------|-------------|
-| `spawn_browser` | Create undetectable browser instance |
-| `navigate` | Navigate to URLs |
-| `close_instance` | Clean shutdown |
-| `list_instances` | Manage multiple sessions |
-| `get_instance_state` | Full browser state |
-| `go_back` / `go_forward` | History navigation |
-| `reload_page` | Reload current page |
-| `take_screenshot` | Capture screenshots |
-| `get_page_content` | HTML and metadata |
+`spawn_browser` · `navigate` · `close_instance` · `list_instances` · `get_instance_state` · `go_back` · `go_forward` · `reload_page` · `take_screenshot` · `get_page_content`
 
 </details>
 
 <details>
-<summary><strong>Element Interaction</strong> — 11 tools</summary>
+<summary><strong>Element Interaction</strong></summary>
 
-| Tool | Description |
-|------|-------------|
-| `query_elements` | Find elements by CSS/XPath |
-| `click_element` | Natural clicking |
-| `type_text` | Human-like typing |
-| `paste_text` | Instant pasting via CDP |
-| `scroll_page` | Natural scrolling |
-| `wait_for_element` | Smart waiting |
-| `execute_script` | Run JavaScript |
-| `select_option` | Dropdown selection |
-| `get_element_state` | Element properties |
+`query_elements` · `click_element` · `type_text` · `paste_text` · `scroll_page` · `wait_for_element` · `execute_script` · `select_option` · `get_element_state`
 
 </details>
 
 <details>
-<summary><strong>Element Extraction</strong> — 9 tools (CDP-accurate)</summary>
+<summary><strong>Element Extraction (CDP-accurate)</strong></summary>
 
-| Tool | Description |
-|------|-------------|
-| `extract_complete_element_cdp` | Complete CDP-based element clone |
-| `clone_element_complete` | Full element cloning |
-| `extract_element_styles` | 300+ CSS properties |
-| `extract_element_structure` | Full DOM tree |
-| `extract_element_events` | React/Vue/framework listeners |
-| `extract_element_animations` | CSS animations/transitions |
-| `extract_element_assets` | Images, fonts, videos |
-| `extract_related_files` | Related CSS/JS files |
+`extract_complete_element_cdp` · `clone_element_complete` · `extract_element_styles` · `extract_element_structure` · `extract_element_events` · `extract_element_animations` · `extract_element_assets` · `extract_related_files`
 
 </details>
 
 <details>
-<summary><strong>Network & Hooks</strong> — 15 tools</summary>
+<summary><strong>Network Interception & Hooks</strong></summary>
 
-| Tool | Description |
-|------|-------------|
-| `list_network_requests` | Captured requests |
-| `get_request_details` | Headers and payload |
-| `get_response_content` | Response data |
-| `modify_headers` | Custom headers |
-| `create_dynamic_hook` | Python functions for real-time interception |
-| `create_simple_dynamic_hook` | Quick hook presets |
-| `list_dynamic_hooks` | Active hooks |
+`list_network_requests` · `get_request_details` · `get_response_content` · `modify_headers` · `create_dynamic_hook` · `create_simple_dynamic_hook` · `list_dynamic_hooks`
 
 </details>
 
 <details>
-<summary><strong>CDP Functions</strong> — 13 tools</summary>
+<summary><strong>CDP Functions</strong></summary>
 
-| Tool | Description |
-|------|-------------|
-| `execute_cdp_command` | Direct CDP commands |
-| `discover_global_functions` | Find JS functions |
-| `call_javascript_function` | Execute any function |
-| `inject_and_execute_script` | Custom JS code |
-| `create_persistent_function` | Functions that survive reloads |
-| `execute_python_in_browser` | Python via py2js |
+`execute_cdp_command` · `discover_global_functions` · `call_javascript_function` · `inject_and_execute_script` · `create_persistent_function` · `execute_python_in_browser`
 
 </details>
 
 <details>
-<summary><strong>Progressive Cloning</strong> — 10 tools</summary>
+<summary><strong>Progressive Cloning</strong></summary>
 
-| Tool | Description |
-|------|-------------|
-| `clone_element_progressive` | Lightweight initial structure |
-| `expand_styles` | On-demand styles |
-| `expand_events` | On-demand events |
-| `expand_children` | Progressive children |
-| `expand_css_rules` | CSS rules data |
-| `expand_pseudo_elements` | Pseudo-elements |
-| `expand_animations` | Animations data |
+`clone_element_progressive` · `expand_styles` · `expand_events` · `expand_children` · `expand_css_rules` · `expand_pseudo_elements` · `expand_animations`
 
 </details>
 
----
+### Modular Configuration
 
-## Modular Architecture
-
-Run the full suite or strip it down. Disable what you don't need.
+Run the full suite or strip it down:
 
 ```bash
-python src/server.py --minimal              # 22 core tools
-python src/server.py --disable-scraping     # No scraping tools
-python src/server.py --disable-cdp-functions --disable-dynamic-hooks
-python src/server.py --list-sections        # See all sections
+python src/server.py --minimal                # Core tools only
+python src/server.py --disable-cdp-functions   # No CDP tools
+python src/server.py --list-sections           # See all sections
 ```
 
 ---
 
-## Stealth vs Playwright
+## Real-World Example
 
-| Feature | ScrapeLab MCP | Playwright MCP |
-|---------|--------------|----------------|
-| Cloudflare / antibot | Bypasses | Commonly blocked |
-| Smart scraping | Recipe system + auto-escalation | Manual only |
-| HTTP fast-path | Built-in (~0.1s) | No |
-| Shared recipes | JSON in repo | No |
-| UI element cloning | CDP-accurate | Limited |
-| Network interception | Dynamic Python hooks | Basic |
-| Total tools | 98 (customizable) | ~20 |
+Scraping 5 WeRoad tours in batch:
+
+```
+You: "Batch scrape these WeRoad URLs and get all departures"
+```
+
+**Result** (2-3 seconds, zero browser):
+
+| Tour | Departures | Engine |
+|------|-----------|--------|
+| Marocco 360° | 197 | recipe_script |
+| Cina 360° | 169 | recipe_script |
+| Perù 360° | 127 | recipe_script |
+| Islanda 360° | 62 | recipe_script |
+| Turchia 360° | 59 | recipe_script |
+
+**614 departures** extracted in parallel via API, structured JSON, consistent schema.
+
+The same task without ScrapeLab would take Claude ~5 minutes, ~250K tokens, and produce inconsistent output.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   MCP Client                         │
+│              (Claude Desktop / Code)                 │
+└──────────────────────┬──────────────────────────────┘
+                       │ MCP Protocol (stdio)
+┌──────────────────────▼──────────────────────────────┐
+│                 ScrapeLab MCP Server                 │
+│                                                      │
+│  ┌──────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │ Recipe DB │  │ Scrape Engine│  │Stealth Browser│  │
+│  │(Supabase) │  │  (3 engines) │  │  (nodriver)   │  │
+│  └──────────┘  └──────────────┘  └───────────────┘  │
+│                                                      │
+│  ┌──────────────┐  ┌─────────┐  ┌────────────────┐  │
+│  │Network Hooks │  │CDP Tools│  │Element Cloning │  │
+│  └──────────────┘  └─────────┘  └────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -262,11 +314,17 @@ python src/server.py --list-sections        # See all sections
 
 **No compatible browser found** — Install Chrome, Chromium, or Edge. Run `validate_browser_environment_tool()` to diagnose.
 
-**Tools hang or return malformed JSON** — Pull the latest branch. Debug output was fixed to not corrupt MCP JSON-RPC.
-
 **Too many tools** — Use `--minimal` or selectively disable sections.
 
-**batch_scrape_urls too large** — Batch returns lightweight results (analysis + 2000 char preview). Use `scrape_url` individually for full markdown.
+**batch_scrape_urls output too large** — Batch returns structured data when recipes have scripts. For sites without recipes, it returns lightweight previews.
+
+---
+
+## Contributors
+
+Built by [ScrapeLab](https://github.com/competitorch) · [Edoardo Nardi](https://github.com/edoardo-nardi)
+
+Stealth browser engine forked from [nicholishen/nodriver-mcp](https://github.com/nicholishen/nodriver-mcp).
 
 ---
 

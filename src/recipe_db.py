@@ -51,10 +51,10 @@ async def init_db():
     _supabase_url = os.getenv("SUPABASE_URL", "")
     _supabase_key = os.getenv("SUPABASE_SERVICE_KEY", "")
     if not _supabase_url or not _supabase_key:
-        print("[recipe_db] WARNING: SUPABASE_URL or SUPABASE_SERVICE_KEY not set. Recipe DB disabled.")
+        import sys; print("[recipe_db] WARNING: SUPABASE_URL or SUPABASE_SERVICE_KEY not set. Recipe DB disabled.", file=sys.stderr)
         return
     await _get_client()
-    print(f"[recipe_db] Connected to Supabase: {_supabase_url}")
+    import sys; print(f"[recipe_db] Connected to Supabase: {_supabase_url}", file=sys.stderr)
 
 
 async def close_db():

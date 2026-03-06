@@ -2980,13 +2980,13 @@ async def batch_scrape_urls(
     recipe = None
     if recipe_id is not None:
         # Find recipe by ID
-        all_recipes = await db_list_recipes()
-        for r in all_recipes:
-            if r.get("id") == recipe_id:
-                recipe = r
-                break
+        recipe = await get_recipe(recipe_id)
         if not recipe:
             return {"error": f"Recipe {recipe_id} not found"}
+    else:
+        # Auto-match: try to find a recipe from the first URL
+        if urls:
+            recipe = await match_recipe(urls[0])
 
     results = await batch_scrape(urls, browser_manager, recipe=recipe, headless=headless)
     return {
