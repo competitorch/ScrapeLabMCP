@@ -72,8 +72,8 @@ scrape_url("https://news.ycombinator.com/")
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/competitorch/scrapeLabMCP_BrowserStealth.git
-cd scrapeLabMCP_BrowserStealth
+git clone https://github.com/competitorch/ScrapeLabMCP.git
+cd ScrapeLabMCP
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -98,8 +98,8 @@ Without Supabase, recipes are stored locally and work fine for single-user setup
 {
   "mcpServers": {
     "scrapelab-mcp": {
-      "command": "/path/to/scrapeLabMCP_BrowserStealth/.venv/bin/python",
-      "args": ["/path/to/scrapeLabMCP_BrowserStealth/src/server.py"],
+      "command": "/path/to/ScrapeLabMCP/.venv/bin/python",
+      "args": ["/path/to/ScrapeLabMCP/src/server.py"],
       "env": {
         "SUPABASE_URL": "https://your-project.supabase.co",
         "SUPABASE_SERVICE_KEY": "your-key"
