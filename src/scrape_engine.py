@@ -187,6 +187,102 @@ class _BrowserAdapter:
         return self._page
 
 
+# --- Smart large-content detection ---
+
+SMART_RESPONSE_THRESHOLD = 50_000  # chars (~12K tokens)
+
+
+def _extract_tables_from_html(html: str) -> List[Dict[str, Any]]:
+    """Parse HTML tables into structured JSON using BeautifulSoup."""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        print("[scrape_engine] beautifulsoup4 not installed, skipping table extraction", file=sys.stderr)
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    tables = []
+
+    for table in soup.find_all("table"):
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        if not headers:
+            # Try first row as headers
+            first_row = table.find("tr")
+            if first_row:
+                headers = [td.get_text(strip=True) for td in first_row.find_all(["td", "th"])]
+
+        if not headers:
+            continue
+
+        rows = []
+        for tr in table.find_all("tr"):
+            cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+            if cells and len(cells) == len(headers):
+                rows.append(dict(zip(headers, cells)))
+
+        if rows:
+            tables.append({
+                "columns": headers,
+                "total_rows": len(rows),
+                "rows": rows,
+            })
+
+    return tables
+
+
+def _build_smart_response(
+    url: str, engine: str, html: str, markdown: str, tables: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Build compact metadata response for large pages."""
+    import tempfile
+
+    response: Dict[str, Any] = {
+        "url": url,
+        "engine": engine,
+        "html_size": len(html),
+        "markdown_size": len(markdown),
+        "large_content": True,
+    }
+
+    if tables:
+        # Use the largest table
+        main_table = max(tables, key=lambda t: t["total_rows"])
+        response["table_detected"] = True
+        response["columns"] = main_table["columns"]
+        response["total_rows"] = main_table["total_rows"]
+        response["sample"] = main_table["rows"][:20]
+
+        # Save full data to temp file
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", prefix="scrapelab_full_",
+                delete=False,
+            )
+            json.dump(main_table["rows"], tmp, ensure_ascii=False, indent=1)
+            tmp.close()
+            response["full_data_path"] = tmp.name
+        except Exception as e:
+            print(f"[scrape_engine] Failed to save full data: {e}", file=sys.stderr)
+
+        response["message"] = (
+            f"Large table detected ({main_table['total_rows']} rows, "
+            f"{len(main_table['columns'])} columns). "
+            f"Showing first 20 rows as sample. "
+            f"Full data saved to {response.get('full_data_path', 'N/A')}. "
+            f"Consider saving a recipe with save_recipe for consistent structured extraction."
+        )
+    else:
+        # No table — return markdown preview
+        response["markdown_preview"] = markdown[:5000]
+        response["message"] = (
+            f"Large page ({len(markdown):,} chars markdown). "
+            f"Showing first 5000 chars as preview. "
+            f"Consider saving a recipe for structured extraction."
+        )
+
+    return response
+
+
 # --- Smart scrape (main entry point) ---
 
 
@@ -329,6 +425,12 @@ async def scrape_smart(
 
     html = result.get("html", "")
     markdown = html_to_markdown(html)
+
+    # Smart large-content detection: return metadata instead of full markdown
+    if len(markdown) > SMART_RESPONSE_THRESHOLD:
+        print(f"[scrape_engine] Large content detected ({len(markdown):,} chars), building smart response", file=sys.stderr)
+        tables = _extract_tables_from_html(html)
+        return _build_smart_response(url, result.get("engine", "unknown"), html, markdown, tables)
 
     # Build response
     response = {
