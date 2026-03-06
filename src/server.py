@@ -2831,7 +2831,7 @@ async def save_recipe(
     Save a scraping recipe after discovery + user validation.
     The recipe stores HOW to scrape a site (strategy only — level, proxy, wait_for, pagination)
     and optionally a prompt (markdown) with extraction instructions.
-    The prompt is saved as a separate .md file in src/data/prompts/.
+    The prompt is saved to the recipe database (Supabase).
 
     Args:
         site_pattern (str): URL pattern to match (e.g. 'weroad.it/avventure').
