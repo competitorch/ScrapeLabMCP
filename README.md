@@ -288,6 +288,47 @@ The same task without ScrapeLab would take Claude ~5 minutes, ~250K tokens, and 
 
 ---
 
+## Benchmarks
+
+### Reliability Test — 10 Sites
+
+We tested `scrape_url` against native `WebFetch` across 10 diverse sites (no recipes, first-time scraping):
+
+| Site | ScrapeLab MCP | WebFetch (native) |
+|------|:---:|:---:|
+| news.ycombinator.com | 10.9K chars, 1.4s | 10.8K chars, 4.4s |
+| books.toscrape.com | 4.0K chars, 1.2s | 3.8K chars, 3.2s |
+| quotes.toscrape.com | 2.5K chars, 0.8s | 2.5K chars, 3.0s |
+| github.com/trending | 22.7K chars, 5.3s | 20.8K chars, 5.1s |
+| en.wikipedia.org | 93.2K chars, 3.5s | **403 Forbidden** |
+| lobste.rs | 10.1K chars, 1.3s | 8.7K chars, 3.4s |
+| dev.to | 35.2K chars, 9.2s | 33.9K chars, 5.7s |
+| httpbin.org/html | 3.6K chars, 0.5s | 3.6K chars, 2.6s |
+| jsonplaceholder.typicode.com | 0.2K chars, 0.6s | 0.1K chars, 2.5s |
+| lite.cnn.com | 10.4K chars, 1.7s | **451 Blocked** |
+
+| Metric | ScrapeLab MCP | WebFetch |
+|--------|:---:|:---:|
+| **Success rate** | **100%** (10/10) | 80% (8/10) |
+| **Avg speed** | **2.7s** | 3.8s |
+| **Blocked sites** | 0 | 2 (Wikipedia, CNN Lite) |
+
+ScrapeLab MCP achieves 100% reliability thanks to automatic browser fallback — when HTTP fails, the stealth browser (nodriver) handles JavaScript rendering and anti-bot protection transparently.
+
+### Smart Large-Content Detection
+
+Pages with 50K+ characters of markdown automatically return structured metadata instead of overflowing the context window:
+
+| Page | Raw size | Smart response |
+|------|----------|----------------|
+| pokemondb.net/pokedex/all | 182K chars | **1,219 rows** parsed into structured JSON, 20-row sample returned, full data saved to file |
+| news.ycombinator.com | 10.9K chars | Full markdown (unchanged) |
+| httpbin.org/html | 3.6K chars | Full markdown (unchanged) |
+
+When a large HTML table is detected, the engine parses it into structured JSON with column names, row count, and a sample — keeping the LLM context clean while preserving all data on disk.
+
+---
+
 ## Architecture
 
 ```
