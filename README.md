@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="media/scrapelab-logo.svg" alt="ScrapeLab MCP" width="200"/>
+<img src="media/scrapelab-logo.svg" alt="ScrapeLab MCP" width="360"/>
 
 # ScrapeLab MCP
 
@@ -51,7 +51,7 @@ Every time after:  URL → recipe script → data          (~1-2s, zero LLM toke
 ## How It Works
 
 ```
-scrape_url("https://www.weroad.it/viaggi/tour-giappone")
+scrape_url("https://news.ycombinator.com/")
 │
 ├── Recipe found? Has script?
 │   └── YES → Execute script directly → structured JSON     ⚡ ~1s
@@ -122,10 +122,10 @@ claude mcp add-json scrapelab-mcp '{
 ### 4. Try it
 
 ```
-You: "Scrape https://www.weroad.it/viaggi/tour-giappone and get all departures"
+You: "Scrape https://news.ycombinator.com and get the top 30 posts with title, score, and URL"
 ```
 
-First time: Claude analyzes the page, discovers the API, creates a recipe with a script.
+First time: Claude analyzes the page, writes a scraping script, saves a recipe.
 Second time: instant structured data, zero browser, zero reasoning.
 
 ---
@@ -142,12 +142,14 @@ Recipes store **how** to scrape a site. Each recipe can contain:
 - **Config** — scrape level, wait selectors, proxy settings
 
 ```python
-# Example: recipe script for a travel site API
+# Example: recipe script for Hacker News
+import httpx
 async def scrape(url: str) -> dict:
-    slug = url.split("/")[-1]
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"https://api.example.com/tours/{slug}/departures")
-        return resp.json()
+        resp = await client.get("https://hacker-news.firebaseio.com/v0/topstories.json")
+        ids = resp.json()[:30]
+        items = [await client.get(f"https://hacker-news.firebaseio.com/v0/item/{i}.json") for i in ids]
+        return {"posts": [r.json() for r in items]}
 ```
 
 Recipes are versioned automatically — every update saves the previous version.
@@ -157,7 +159,7 @@ Recipes are versioned automatically — every update saves the previous version.
 Scrape multiple URLs in parallel with automatic recipe matching:
 
 ```
-You: "Batch scrape these 10 WeRoad tour URLs"
+You: "Batch scrape these 10 product pages from the site"
 ```
 
 The batch engine runs all recipe scripts in parallel (~2-3s for 10 URLs) with automatic fallback to HTTP/browser for failures.
@@ -264,23 +266,23 @@ python src/server.py --list-sections           # See all sections
 
 ## Real-World Example
 
-Scraping 5 WeRoad tours in batch:
+Monitoring prices across 5 e-commerce product pages:
 
 ```
-You: "Batch scrape these WeRoad URLs and get all departures"
+You: "Batch scrape these 5 product URLs and extract name, price, availability"
 ```
 
 **Result** (2-3 seconds, zero browser):
 
-| Tour | Departures | Engine |
+| Product Page | Items | Engine |
 |------|-----------|--------|
-| Marocco 360° | 197 | recipe_script |
-| Cina 360° | 169 | recipe_script |
-| Perù 360° | 127 | recipe_script |
-| Islanda 360° | 62 | recipe_script |
-| Turchia 360° | 59 | recipe_script |
+| Electronics Store — Laptops | 24 | recipe_script |
+| Electronics Store — Phones | 18 | recipe_script |
+| Electronics Store — Tablets | 12 | recipe_script |
+| Electronics Store — Monitors | 31 | recipe_script |
+| Electronics Store — Audio | 15 | recipe_script |
 
-**614 departures** extracted in parallel via API, structured JSON, consistent schema.
+**100 products** extracted in parallel via API, structured JSON, consistent schema.
 
 The same task without ScrapeLab would take Claude ~5 minutes, ~250K tokens, and produce inconsistent output.
 
